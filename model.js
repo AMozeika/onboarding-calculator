@@ -4,10 +4,10 @@
  */
 (function(root){
  'use strict';
- const defaults={S0:99500000,R0:50000000,P:28.92,N:100,gamma:1,K:1,days:7.5,months:6,m:14256,M:1000000,mode:'solve'};
+ const defaults={S0:99500000,R0:50000000,P:28.92,N:100,gamma:1,beta:0,K:1,days:7.5,months:6,m:14256,M:1000000,mode:'solve'};
  const epochs=p=>p.months*365/(12*p.days);
  function validate(p){
-   const bounds={S0:[1,1e15],R0:[0,1e15],P:[0,1e12],N:[1,1e7],gamma:[0,1],K:[1e-9,1e9],days:[.01,365],months:[.01,12],m:[0,1e15],M:[0,1e18]};
+   const bounds={S0:[1,1e15],R0:[0,1e15],P:[0,1e12],N:[1,1e7],gamma:[0,1],beta:[0,1],K:[1e-9,1e9],days:[.01,365],months:[.01,12],m:[0,1e15],M:[0,1e18]};
    for(const [k,[lo,hi]] of Object.entries(bounds)) if(!Number.isFinite(p[k])||p[k]<lo||p[k]>hi) throw new Error(`${k} must be between ${lo} and ${hi}.`);
    if(!Number.isInteger(p.N))throw new Error('The number of newcomers must be a whole number.');
    if(!['solve','income','total'].includes(p.mode))throw new Error('Choose a valid calculation mode.');
@@ -27,9 +27,10 @@
  }
  function required(p){
    const T=epochs(p);
-   if(p.gamma*p.P*T<=p.N*p.K)return {status:'revenue',m:null,M:null,cost:null};
+   if(p.gamma===0)return {status:'allocation',m:null,M:null,cost:null};
+   if(p.beta===0&&p.gamma*p.P*T<=p.N*p.K)return {status:'revenue',m:null,M:null,cost:null};
    let lo=0,hi=p.S0/T;
-   const balance=M=>p.gamma*A(T,M,p)/p.N;
+   const balance=M=>p.gamma*(p.beta*M*T+A(T,M,p))/p.N;
    for(let j=0;balance(hi)<p.K;j++){
      hi*=2;if(j>200||!Number.isFinite(hi))return {status:'numerical',m:null,M:null,cost:null};
    }
@@ -40,10 +41,11 @@
  function state(t,M,p){
    const stop=M>0?p.R0/M:Infinity,u=Math.min(t,stop);
    const m=p.gamma*M/p.N;
-   let b=p.gamma*A(u,M,p)/p.N;
-   const locked=m*u;
+   const direct=p.beta*m*u;
+   let b=direct+p.gamma*A(u,M,p)/p.N;
+   const locked=(1-p.beta)*m*u;
    if(t>u)b+=p.P*(locked+b)/(p.S0+(M+p.P)*u)*(t-u);
-   return {t,s:locked+b,b,locked,R:Math.max(0,p.R0-M*u),total:p.S0+M*u+p.P*t};
+   return {t,s:locked+b,b,locked,direct,leadership:b-direct,R:Math.max(0,p.R0-M*u),total:p.S0+M*u+p.P*t};
  }
  function evaluate(p){
    validate(p);
@@ -64,9 +66,10 @@
  }
  function approximations(p){
    const T=epochs(p);
-   if(p.P===0||p.gamma===0)return {leading:null,corrected:null};
-   const leading=2*p.K*p.S0/(p.P*T*T);
-   return {leading,corrected:leading*(1+(2*p.N*leading/p.gamma+p.P)*T/(3*p.S0))};
+   const leadershipCoefficient=p.P*T*T/(2*p.S0),denominator=p.beta*T+leadershipCoefficient;
+   if(denominator===0||p.gamma===0)return {leading:null,corrected:null};
+   const leading=p.K/denominator;
+   return {leading,corrected:leading*(1+leadershipCoefficient/denominator*(2*p.N*leading/p.gamma+p.P)*T/(3*p.S0))};
  }
  function checks(){
    const cases=[

@@ -15,6 +15,14 @@ No reference source code was copied. This is not an implementation of that panel
 
 Run checks with `node test-model.cjs`.
 
+The beta parameter controls the immediately unlocked fraction of mining rewards (0–100% in
+the UI, 0–1 in the model and CSV). Its default is zero, preserving the original results.
+Both portions are staked. Before maturity, b = beta*m*t + gamma*A/N and
+locked = (1-beta)*m*t. Total stake and pool dynamics are independent of beta at fixed payout.
+The solver, approximations, deadline matrix, plots, and CSV all use beta. Exports also separate
+direct unlocked mining income from leadership income. Tests cover zero leadership, beta=1,
+pool exhaustion, conservation, monotonicity, and independent numerical ODE integration.
+
 Modes: find the minimum constant income for a deadline; evaluate a fixed income per newcomer;
 or evaluate a fixed total payout. The solver's budget check requires the constant payout to be
 funded through the deadline. Plots enforce exhaustion and continue leadership income afterwards.

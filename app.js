@@ -14,12 +14,13 @@ const groups=[['Population & deadline',[
  ['P','Leadership pot P_L (LOGOS/epoch)',0,1e12,'any','Unlocked income shared by all stakers.'],
  ['days','Days per epoch',.01,365,'any','Calendar conversion uses 365 days/year.']]],
  ['Mining policy',[
+ ['beta','Immediately unlocked mining fraction β (%)',0,100,'any','0% = all locked; 1% means β = 0.01. Both portions are staked.'],
  ['m','Mining income m (LOGOS/newcomer/epoch)',0,1e15,'any','Used in “Evaluate income per newcomer”.'],
  ['M','Total mining payout M (LOGOS/epoch)',0,1e18,'any','Used in “Evaluate fixed total mining payout”.']]]];
 function build(){
  $('controls').innerHTML=groups.map(([name,items])=>`<fieldset><legend>${name}</legend>${items.map(([id,label,min,max,step,hint])=>`<label class="ctl" id="field-${id}" for="${id}"><span>${label}</span><input id="${id}" type="number" min="${min}" max="${max}" step="${step}" aria-describedby="hint-${id}"><span id="hint-${id}" class="hint">${hint}</span>${id==='gamma'?'<input id="gamma-range" type="range" min="0" max="100" step="0.1" aria-label="Newcomer payout share slider">':''}</label>`).join('')}</fieldset>`).join('');
  for(const [,items]of groups)for(const [id]of items)$(id).addEventListener('input',()=>{
-   p[id]=$(id).value===''?NaN:Number($(id).value)/(id==='gamma'?100:1);
+   p[id]=$(id).value===''?NaN:Number($(id).value)/(['gamma','beta'].includes(id)?100:1);
    if(id==='gamma'&&Number.isFinite(p.gamma))$('gamma-range').value=p.gamma*100;
    refresh();
  });
@@ -32,20 +33,21 @@ function build(){
 }
 function sync(){
  $('mode').value=p.mode;
- for(const [,items]of groups)for(const [id]of items)$(id).value=p[id]*(id==='gamma'?100:1);
+ for(const [,items]of groups)for(const [id]of items)$(id).value=p[id]*(['gamma','beta'].includes(id)?100:1);
  $('gamma-range').value=p.gamma*100;
  $('field-m').hidden=p.mode!=='income';$('field-M').hidden=p.mode!=='total';
 }
 function readouts(rows){$('readouts').innerHTML=rows.map(([a,b,c])=>`<tr><td>${a}</td><td>${b}</td><td>${c}</td></tr>`).join('');}
 function refresh(){
  try{last=O.evaluate(p);$('error').hidden=true;$('output').hidden=false;}
- catch(e){$('error').textContent=e.message;$('error').hidden=false;$('output').hidden=true;last=null;return;}
+ catch(e){$('error').textContent=e.message.startsWith('beta must')?'Unlocked mining fraction β must be between 0% and 100%.':e.message;$('error').hidden=false;$('output').hidden=true;last=null;return;}
  const r=last,T=r.T,ver=$('verdict');
  if(r.M===null){
    ver.className='verdict bad';
    ver.innerHTML='<strong>No finite mining rate reaches this deadline</strong>The newcomer share of the leadership pot is too small, even with an unlimited mining pool.';
    if(r.target.status==='numerical')ver.innerHTML='<strong>Outside numerical solver range</strong>The target is too close to the revenue boundary to resolve a reliable mining rate.';
-   readouts([['Leadership ceiling per newcomer',fmt(p.gamma*p.P*T/p.N,6)+' LOGOS','Strict upper bound for finite mining rates'],['Required unlocked balance',fmt(p.K,6)+' LOGOS','Per newcomer'],['Available pool',fmt(p.R0)+' LOGOS','Cannot remedy a leadership-income shortfall']]);
+   if(r.target.status==='allocation')ver.innerHTML='<strong>No mining income is allocated to newcomers</strong>A zero newcomer payout share cannot fund initially tokenless newcomers, regardless of β.';
+   readouts([['Leadership ceiling per newcomer',fmt(p.gamma*p.P*T/p.N,6)+' LOGOS',p.beta===0?'Strict upper bound for finite mining rates':'Newcomers receive no payout at γ = 0'],['Required unlocked balance',fmt(p.K,6)+' LOGOS','Per newcomer'],['Available pool',fmt(p.R0)+' LOGOS','Cannot remedy zero allocation or a leadership-only shortfall']]);
    $('plotnote').textContent='No required income exists for this target, so no trajectory is shown. Choose an evaluation mode to inspect a specified payout.';
    for(const id of ['stake','unlocked','pool']){$(id).innerHTML='';$(id+'-value').textContent='No finite solution';}
    $('csv').disabled=true;
@@ -63,18 +65,21 @@ function refresh(){
      [p.mode==='solve'?'Required mining income m':'Mining income m',fmt(r.m,4)+' LOGOS/epoch','Per newcomer; constant while funded'],
      ['Total mining payout M',fmt(r.M,2)+' LOGOS/epoch','Newcomers and incumbent miners combined'],
      ['Unlocked balance at deadline',fmt(r.end.b,6)+' LOGOS','Per newcomer; after enforcing the pool limit'],
+     ['Directly mined unlocked balance',fmt(r.end.direct,6)+' LOGOS',`β = ${fmt(p.beta*100,6)}% of received mining income`],
+     ['Accumulated leadership income',fmt(r.end.leadership,6)+' LOGOS','Unlocked and reinvested; excludes direct mining income'],
      ['Total stake at deadline',fmt(r.end.s,3)+' LOGOS','Includes locked and unlocked tokens'],
      ['Pool remaining at deadline',fmt(r.end.R,2)+' LOGOS',`${fmt(100*(p.R0-r.end.R)/(p.R0||1),2)}% of initial pool spent`],
      ['Full-horizon payout commitment',fmt(r.cost,2)+' LOGOS',r.cost>p.R0?'Exceeds budget; not a realised expenditure':'Within initial pool budget'],
      ['Qualification time',r.hit===null?'Not within one year':fmt(hitMonths,4)+' months','With mining stopped at pool exhaustion'],
      ['Pool exhaustion',Number.isFinite(stopMonths)?fmt(stopMonths,3)+' months':'Never (no payout)','Pre-unlock payout-policy projection'],
-     ['First-corrected required income',fmt(approx.corrected,2)+' LOGOS/epoch',`Small-growth approximation only; ε = ${fmt(r.epsilon,3)} (needs ≪ 1)`]
+     ['Lower bound on required income',fmt(approx.leading,4)+' LOGOS/epoch','K_B / [βT + P_L T²/(2S₀)]; necessary, not sufficient'],
+     ['First-corrected required income',fmt(approx.corrected,4)+' LOGOS/epoch',`Small-growth approximation only; ε = ${fmt(r.epsilon,3)} (needs ≪ 1)`]
    ]);
    $('plotnote').textContent=`Per-newcomer balances and the shared pool. Hover or touch a curve for values. ${p.months===12?'The endpoint is immediately before unlocking.':''}`;
    $('csv').disabled=false;drawAll();
  }
  const shares=[1,.75,.5,.25,.1];
- $('sweep').querySelector('tbody').innerHTML=Array.from({length:6},(_,i)=>`<tr><td>${i+1} month${i?'s':''}</td>${shares.map(gamma=>{const q=O.required({...p,months:i+1,gamma});return `<td class="${q.status}" title="${q.cost===null?'Insufficient leadership income':`Total required payout: ${fmt(q.cost)} LOGOS`}">${q.m===null?(q.status==='numerical'?'Unresolved':'No finite rate'):fmt(q.m,0)+(q.status==='budget'?' †':'')}</td>`;}).join('')}</tr>`).join('');
+ $('sweep').querySelector('tbody').innerHTML=Array.from({length:6},(_,i)=>`<tr><td>${i+1} month${i?'s':''}</td>${shares.map(gamma=>{const q=O.required({...p,months:i+1,gamma});return `<td class="${q.status}" title="${q.cost===null?'Insufficient leadership income':`Total required payout: ${fmt(q.cost)} LOGOS`}">${q.m===null?(q.status==='numerical'?'Unresolved':'No finite rate'):fmt(q.m,q.m<10?4:0)+(q.status==='budget'?' †':'')}</td>`;}).join('')}</tr>`).join('');
 }
 function drawAll(){if(!last||last.M===null)return;draw('stake','s','#14668c','LOGOS');draw('unlocked','b','#176b55','LOGOS',p.K);draw('pool','R','#a4661c','LOGOS');}
 function draw(id,key,color,unit,threshold){
@@ -103,8 +108,8 @@ function draw(id,key,color,unit,threshold){
 }
 function download(){
  if(!last||last.M===null)return;
- const header='months,epochs,stake_LOGOS,unlocked_LOGOS,locked_LOGOS,pool_LOGOS,N,gamma,m_LOGOS_per_epoch,M_LOGOS_per_epoch,S0,P_L,R0,K_B,epoch_days';
- const csv=[header,...last.points.map(q=>[q.t*p.days*12/365,q.t,q.s,q.b,q.locked,q.R,p.N,p.gamma,last.m,last.M,p.S0,p.P,p.R0,p.K,p.days].join(','))].join('\n');
+ const header='months,epochs,stake_LOGOS,unlocked_LOGOS,locked_LOGOS,pool_LOGOS,N,gamma,m_LOGOS_per_epoch,M_LOGOS_per_epoch,S0,P_L,R0,K_B,epoch_days,beta,direct_unlocked_mining_LOGOS,leadership_LOGOS';
+ const csv=[header,...last.points.map(q=>[q.t*p.days*12/365,q.t,q.s,q.b,q.locked,q.R,p.N,p.gamma,last.m,last.M,p.S0,p.P,p.R0,p.K,p.days,p.beta,q.direct,q.leadership].join(','))].join('\n');
  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'})),a=document.createElement('a');a.href=url;a.download='onboarding-trajectories.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 build();
